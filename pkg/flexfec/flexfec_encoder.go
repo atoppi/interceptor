@@ -20,33 +20,36 @@ const (
 	BaseFecHeaderSize = 12
 )
 
+type FlexEncoder interface {
+	EncodeFec(mediaPackets []rtp.Packet, numFecPackets uint32) []rtp.Packet
+}
+
 // FlexEncoder implements the Fec encoding mechanism for the "Flex" variant of FlexFec.
-type FlexEncoder struct {
-	baseSN      uint16
+type FlexEncoder20 struct {
+	fecBaseSn   uint16
 	payloadType uint8
 	ssrc        uint32
 	coverage    *ProtectionCoverage
 }
 
 // NewFlexEncoder returns a new FlexFecEncer.
-func NewFlexEncoder(baseSN uint16, payloadType uint8, ssrc uint32) *FlexEncoder {
-	return &FlexEncoder{
-		baseSN:      baseSN,
+func NewFlexEncoder20(payloadType uint8, ssrc uint32) *FlexEncoder20 {
+	return &FlexEncoder20{
 		payloadType: payloadType,
 		ssrc:        ssrc,
-		coverage:    nil,
+		fecBaseSn:   uint16(1000),
 	}
 }
 
 // EncodeFec returns a list of generated RTP packets with FEC payloads that protect the specified mediaPackets.
 // This method does not account for missing RTP packets in the mediaPackets array nor does it account for
 // them being passed out of order.
-func (flex *FlexEncoder) EncodeFec(mediaPackets []rtp.Packet, numFecPackets uint32) []rtp.Packet {
+func (flex *FlexEncoder20) EncodeFec(mediaPackets []rtp.Packet, numFecPackets uint32) []rtp.Packet {
 	// Start by defining which FEC packets cover which media packets
 	if flex.coverage == nil {
 		flex.coverage = NewCoverage(mediaPackets, numFecPackets)
 	} else {
-		flex.coverage.ResetCoverage()
+		flex.coverage.UpdateCoverage(mediaPackets, numFecPackets)
 	}
 
 	if flex.coverage == nil {
@@ -56,39 +59,42 @@ func (flex *FlexEncoder) EncodeFec(mediaPackets []rtp.Packet, numFecPackets uint
 	// Generate FEC payloads
 	fecPackets := make([]rtp.Packet, numFecPackets)
 	for fecPacketIndex := uint32(0); fecPacketIndex < numFecPackets; fecPacketIndex++ {
-		fecPackets[fecPacketIndex] = flex.encodeFlexFecPacket(fecPacketIndex)
+		fecPackets[fecPacketIndex] = flex.encodeFlexFecPacket(fecPacketIndex, mediaPackets[0].SequenceNumber)
 	}
 
 	return fecPackets
 }
 
-func (flex *FlexEncoder) encodeFlexFecPacket(fecPacketIndex uint32) rtp.Packet {
+func (flex *FlexEncoder20) encodeFlexFecPacket(fecPacketIndex uint32, mediaBaseSn uint16) rtp.Packet {
 	mediaPacketsIt := flex.coverage.GetCoveredBy(fecPacketIndex)
 	flexFecHeader := flex.encodeFlexFecHeader(
 		mediaPacketsIt,
 		flex.coverage.ExtractMask1(fecPacketIndex),
 		flex.coverage.ExtractMask2(fecPacketIndex),
 		flex.coverage.ExtractMask3(fecPacketIndex),
+		mediaBaseSn,
 	)
 	flexFecRepairPayload := flex.encodeFlexFecRepairPayload(mediaPacketsIt.Reset())
 
-	return rtp.Packet{
+	packet := rtp.Packet{
 		Header: rtp.Header{
 			Version:        2,
 			Padding:        false,
 			Extension:      false,
 			Marker:         false,
 			PayloadType:    flex.payloadType,
-			SequenceNumber: flex.baseSN,
+			SequenceNumber: flex.fecBaseSn,
 			Timestamp:      54243243,
 			SSRC:           flex.ssrc,
 			CSRC:           []uint32{},
 		},
 		Payload: append(flexFecHeader, flexFecRepairPayload...),
 	}
+	flex.fecBaseSn++
+	return packet
 }
 
-func (flex *FlexEncoder) encodeFlexFecHeader(mediaPackets *util.MediaPacketIterator, mask1 uint16, optionalMask2 uint32, optionalMask3 uint64) []byte {
+func (flex *FlexEncoder20) encodeFlexFecHeader(mediaPackets *util.MediaPacketIterator, mask1 uint16, optionalMask2 uint32, optionalMask3 uint64, mediaBaseSn uint16) []byte {
 	/*
 	   0                   1                   2                   3
 	        0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -119,7 +125,7 @@ func (flex *FlexEncoder) encodeFlexFecHeader(mediaPackets *util.MediaPacketItera
 		headerSize += 8
 	}
 
-	// Allocate a the FlexFec header
+	// Allocate the FlexFec header
 	flexFecHeader := make([]byte, headerSize)
 
 	// XOR the relevant fields for the header
@@ -149,6 +155,9 @@ func (flex *FlexEncoder) encodeFlexFecHeader(mediaPackets *util.MediaPacketItera
 		flexFecHeader[7] ^= flexFecHeader[7]
 	}
 
+	// Write the base SN for the batch of media packets
+	binary.BigEndian.PutUint16(flexFecHeader[8:10], mediaBaseSn)
+
 	// Write the bitmasks to the header
 	binary.BigEndian.PutUint16(flexFecHeader[10:12], mask1)
 
@@ -163,7 +172,7 @@ func (flex *FlexEncoder) encodeFlexFecHeader(mediaPackets *util.MediaPacketItera
 	return flexFecHeader
 }
 
-func (flex *FlexEncoder) encodeFlexFecRepairPayload(mediaPackets *util.MediaPacketIterator) []byte {
+func (flex *FlexEncoder20) encodeFlexFecRepairPayload(mediaPackets *util.MediaPacketIterator) []byte {
 	flexFecPayload := make([]byte, len(mediaPackets.First().Payload))
 
 	for mediaPackets.HasNext() {
