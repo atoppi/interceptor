@@ -107,12 +107,16 @@ func (s *SenderInterceptor) BindRemoteStream(_ *interceptor.StreamInfo, reader i
 		if err != nil {
 			return 0, nil, err
 		}
+		ecn, err := attr.GetEcn()
+		if err != nil {
+			return 0, nil, err
+		}
 
 		p := packet{
 			arrival:        s.now(),
 			ssrc:           header.SSRC,
 			sequenceNumber: header.SequenceNumber,
-			ecn:            0, // ECN is not supported (yet).
+			ecn:            ecn,
 		}
 		s.packetChan <- p
 		return i, attr, nil

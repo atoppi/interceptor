@@ -4,6 +4,7 @@
 package rfc8888
 
 import (
+	"math/rand"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -24,6 +25,7 @@ type Recorder struct {
 // NewRecorder creates a new Recorder
 func NewRecorder() *Recorder {
 	return &Recorder{
+		ssrc:    rand.Uint32(),
 		streams: map[uint32]*streamLog{},
 	}
 }

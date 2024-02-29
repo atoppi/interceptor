@@ -15,6 +15,7 @@ type unmarshaledDataKeyType int
 const (
 	rtpHeaderKey unmarshaledDataKeyType = iota
 	rtcpPacketsKey
+	ecnKey
 )
 
 var errInvalidType = errors.New("found value of invalid type in attributes map")
@@ -65,4 +66,23 @@ func (a Attributes) GetRTCPPackets(raw []byte) ([]rtcp.Packet, error) {
 	}
 	a[rtcpPacketsKey] = pkts
 	return pkts, nil
+}
+
+func (a Attributes) SetEcn(ancillary *uint16) (uint8, error) {
+	var ecn uint8
+	if ancillary != nil {
+		ecn = uint8(*ancillary & 0x03)
+		a[ecnKey] = ecn
+	}
+	return ecn, nil
+}
+
+func (a Attributes) GetEcn() (uint8, error) {
+	if val, ok := a[ecnKey]; ok {
+		if ecn, ok := val.(uint8); ok {
+			return ecn, nil
+		}
+		return 0, errInvalidType
+	}
+	return 0, nil
 }
